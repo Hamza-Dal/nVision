@@ -26,13 +26,21 @@ nVision requires a current MATLAB installation with these toolboxes:
 
 Toolboxes can be installed through `Apps > Get More Apps` in MATLAB.
 
-### Linux / WSL port
+### Python port (Linux / WSL)
+
+The Python port runs without MATLAB and supports the 200, 500, and 1000 Hz
+processing paths. It expects a headerless little-endian float32 `.dat`
+recording.
 
 ```bash
 cd nVision_core/python_port
 bash setup_linux.sh
-bash run_nvision.sh
+bash run_nvision.sh /path/to/recording.dat --rate 200 --output outputs/result.json
 ```
+
+Replace `200` with the recording's acquisition rate (`500` or `1000` when
+applicable). The launcher uses a local Python virtual environment created by
+`setup_linux.sh`.
 
 * * *
 
@@ -61,6 +69,10 @@ bash run_nvision.sh
 
 Kamintsky L, van Hameren G, Weissberg I, Moradi P, Prager O, Ahmad AA, et al. [An algorithm for seizure detection in rodents](https://doi.org/10.1002/epi4.70070). *Epilepsia Open*. 2025. Open access under the [CC BY-NC-ND 4.0 license](https://creativecommons.org/licenses/by-nc-nd/4.0/).
 
-* * *
-
-nVision is currently maintained and curated by Hamza Imtiaz.
+<p align="center">
+Curated by Hamza Imtiaz,<br />
+PhD Candidate at the Friedman Lab<br />
+Dalhousie University, Canada<br />
+Email: <a href="mailto:hamza@dal.ca">hamza@dal.ca</a><br />
+<a href="https://bbbscience.com">bbbscience.com</a>
+</p>

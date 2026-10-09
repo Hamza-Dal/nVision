@@ -45,6 +45,9 @@ The GUI requires an X11 or Wayland display session and uses the same Python
 processing pipeline as the CLI. It writes the JSON result, feature CSV, and
 analysis MAT file to the selected output folder.
 
+See [Python and Linux usage](docs/python-linux-usage.md) for Windows
+PowerShell, native Ubuntu, and WSL instructions.
+
 * * *
 
 ## ◈ ANN architecture

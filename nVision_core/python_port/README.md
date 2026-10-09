@@ -58,3 +58,6 @@ the same Python pipeline as the CLI. Select a `.dat` recording, choose its
 acquisition rate, select an output folder, calculate features, and find
 seizures. The GUI writes the JSON result, feature CSV, and analysis MAT file
 to the selected output folder.
+
+For complete Windows, native Ubuntu, and WSL instructions, see
+[`docs/python-linux-usage.md`](../../docs/python-linux-usage.md).

@@ -1,113 +1,93 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
   <title id="title">nVision Core C4 container diagram</title>
-  <desc id="desc">C4 Level 2 container diagram showing an operator using the nVision Core Python pipeline and MATLAB reference implementation with recordings, model and filter assets, and analysis outputs.</desc>
+  <desc id="desc">C4 container view of nVision Core: an operator runs the Python interface, which invokes the detection pipeline, reads recordings, loads model and filter assets, and writes analysis results. The MATLAB implementation is used for reference validation.</desc>
   <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L10,3 L0,6 Z" fill="#425466"/>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L11,4 L0,8 Z" fill="#333333"/>
     </marker>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#172b4d" flood-opacity="0.14"/>
-    </filter>
     <style>
-      .title { font: 700 28px Arial, sans-serif; fill: #172b4d; }
-      .subtitle { font: 400 16px Arial, sans-serif; fill: #5e6c84; }
-      .label { font: 700 17px Arial, sans-serif; fill: #172b4d; }
-      .text { font: 400 14px Arial, sans-serif; fill: #344563; }
-      .small { font: 400 12px Arial, sans-serif; fill: #5e6c84; }
-      .edge { stroke: #425466; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
-      .edge-label { font: 400 13px Arial, sans-serif; fill: #425466; paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
-      .person { fill: #fff4d6; stroke: #d99a00; stroke-width: 2; }
-      .system { fill: #e8f1ff; stroke: #2f6fbe; stroke-width: 2; }
-      .container { fill: #e9f7ef; stroke: #2c8c58; stroke-width: 2; }
-      .data { fill: #f2f4f7; stroke: #6b778c; stroke-width: 2; }
-      .boundary { fill: #f8fafc; stroke: #8b98a9; stroke-width: 2.5; stroke-dasharray: 9 7; }
+      .heading { font: 700 28px Arial, sans-serif; fill: #222222; }
+      .caption { font: 400 15px Arial, sans-serif; fill: #555555; }
+      .name { font: 700 18px Arial, sans-serif; }
+      .kind { font: 400 13px Arial, sans-serif; }
+      .body { font: 400 15px Arial, sans-serif; }
+      .relation { font: 400 14px Arial, sans-serif; fill: #333333; paint-order: stroke; stroke: #ffffff; stroke-width: 6px; stroke-linejoin: round; }
+      .boundary { fill: #ffffff; stroke: #1769aa; stroke-width: 3; }
+      .container { fill: #eef6ff; stroke: #1769aa; stroke-width: 3; }
+      .person { fill: #f5fff0; stroke: #2d7d32; stroke-width: 3; }
+      .external { fill: #fff7eb; stroke: #bf7600; stroke-width: 3; }
+      .store { fill: #f7f7f7; stroke: #1769aa; stroke-width: 3; }
+      .line { fill: none; stroke: #333333; stroke-width: 2.2; stroke-dasharray: 9 8; marker-end: url(#arrow); }
     </style>
   </defs>
 
-  <rect width="1400" height="820" fill="#ffffff"/>
-  <text x="60" y="58" class="title">nVision Core — C4 Container Diagram</text>
-  <text x="60" y="87" class="subtitle">Level 2: the deployable Linux/WSL seizure-detection system and its principal runtime containers</text>
+  <rect width="1400" height="900" fill="#ffffff"/>
+  <text x="60" y="55" class="heading">nVision Core — Container View</text>
+  <text x="60" y="82" class="caption">C4 Level 2 · Linux / WSL seizure-detection system</text>
 
-  <!-- External actors and systems -->
-  <g filter="url(#shadow)">
-    <rect x="60" y="310" width="190" height="104" rx="10" class="person"/>
-    <text x="155" y="345" text-anchor="middle" class="label">Operator</text>
-    <text x="155" y="371" text-anchor="middle" class="text">Runs analysis and</text>
-    <text x="155" y="392" text-anchor="middle" class="text">reviews detections</text>
-  </g>
+  <circle cx="170" cy="180" r="42" class="person"/>
+  <rect x="70" y="225" width="200" height="120" rx="14" class="person"/>
+  <text x="170" y="260" text-anchor="middle" class="name" fill="#2d7d32">Operator</text>
+  <text x="170" y="282" text-anchor="middle" class="kind" fill="#2d7d32">[Person]</text>
+  <text x="170" y="310" text-anchor="middle" class="body" fill="#2d7d32">Runs analysis and</text>
+  <text x="170" y="331" text-anchor="middle" class="body" fill="#2d7d32">reviews detections</text>
 
-  <g filter="url(#shadow)">
-    <rect x="60" y="545" width="190" height="104" rx="10" class="data"/>
-    <text x="155" y="580" text-anchor="middle" class="label">ECoG recording</text>
-    <text x="155" y="606" text-anchor="middle" class="text">Raw .dat signal</text>
-    <text x="155" y="627" text-anchor="middle" class="small">External input</text>
-  </g>
+  <rect x="350" y="135" width="735" height="650" rx="16" class="boundary"/>
+  <text x="380" y="175" class="name" fill="#1769aa">nVision Core</text>
+  <text x="380" y="199" class="kind" fill="#1769aa">[Software System]</text>
+  <text x="380" y="223" class="caption">Five-feature seizure detection</text>
 
-  <!-- System boundary -->
-  <rect x="330" y="150" width="1000" height="530" rx="18" class="boundary"/>
-  <text x="360" y="185" class="label">nVision Core</text>
-  <text x="360" y="209" class="small">Seizure detection software system</text>
+  <rect x="405" y="275" width="270" height="145" rx="12" class="container"/>
+  <text x="540" y="313" text-anchor="middle" class="name" fill="#1769aa">Python interface</text>
+  <text x="540" y="337" text-anchor="middle" class="kind" fill="#1769aa">[Container]</text>
+  <text x="540" y="367" text-anchor="middle" class="body" fill="#1769aa">CLI and launcher</text>
+  <text x="540" y="390" text-anchor="middle" class="body" fill="#1769aa">Starts processing</text>
 
-  <!-- Containers -->
-  <g filter="url(#shadow)">
-    <rect x="390" y="255" width="260" height="150" rx="10" class="container"/>
-    <text x="520" y="292" text-anchor="middle" class="label">Python processing</text>
-    <text x="520" y="318" text-anchor="middle" class="text">CLI and launcher</text>
-    <text x="520" y="341" text-anchor="middle" class="text">Feature extraction</text>
-    <text x="520" y="364" text-anchor="middle" class="text">Classification and reporting</text>
-    <text x="520" y="389" text-anchor="middle" class="small">Linux / WSL runtime</text>
-  </g>
+  <rect x="735" y="275" width="290" height="145" rx="12" class="container"/>
+  <text x="880" y="313" text-anchor="middle" class="name" fill="#1769aa">Detection pipeline</text>
+  <text x="880" y="337" text-anchor="middle" class="kind" fill="#1769aa">[Container]</text>
+  <text x="880" y="367" text-anchor="middle" class="body" fill="#1769aa">Filtering, five features,</text>
+  <text x="880" y="390" text-anchor="middle" class="body" fill="#1769aa">classification, intervals</text>
 
-  <g filter="url(#shadow)">
-    <rect x="700" y="255" width="260" height="150" rx="10" class="container"/>
-    <text x="830" y="292" text-anchor="middle" class="label">MATLAB reference</text>
-    <text x="830" y="318" text-anchor="middle" class="text">Canonical five-feature core</text>
-    <text x="830" y="341" text-anchor="middle" class="text">Reference paths for 200/500/1000 Hz</text>
-    <text x="830" y="364" text-anchor="middle" class="text">Algorithm comparison</text>
-    <text x="830" y="389" text-anchor="middle" class="small">Validation/reference container</text>
-  </g>
+  <rect x="405" y="535" width="270" height="130" rx="12" class="container"/>
+  <text x="540" y="572" text-anchor="middle" class="name" fill="#1769aa">MATLAB reference</text>
+  <text x="540" y="596" text-anchor="middle" class="kind" fill="#1769aa">[Container]</text>
+  <text x="540" y="625" text-anchor="middle" class="body" fill="#1769aa">Canonical algorithm</text>
+  <text x="540" y="647" text-anchor="middle" class="body" fill="#1769aa">for comparison</text>
 
-  <g filter="url(#shadow)">
-    <rect x="1010" y="255" width="260" height="150" rx="10" class="container"/>
-    <text x="1140" y="292" text-anchor="middle" class="label">Model and filter assets</text>
-    <text x="1140" y="318" text-anchor="middle" class="text">Neural-network weights</text>
-    <text x="1140" y="341" text-anchor="middle" class="text">High/low-pass coefficients</text>
-    <text x="1140" y="364" text-anchor="middle" class="text">Sampling-rate parameters</text>
-    <text x="1140" y="389" text-anchor="middle" class="small">MAT / data assets</text>
-  </g>
+  <path d="M760 555 C760 532 1000 532 1000 555 L1000 655 C1000 678 760 678 760 655 Z" class="store"/>
+  <ellipse cx="880" cy="555" rx="120" ry="23" class="store"/>
+  <text x="880" y="588" text-anchor="middle" class="name" fill="#1769aa">Model and filters</text>
+  <text x="880" y="612" text-anchor="middle" class="kind" fill="#1769aa">[Data Store]</text>
+  <text x="880" y="640" text-anchor="middle" class="body" fill="#1769aa">Networks, coefficients,</text>
+  <text x="880" y="661" text-anchor="middle" class="body" fill="#1769aa">sampling-rate settings</text>
 
-  <g filter="url(#shadow)">
-    <rect x="545" y="500" width="300" height="125" rx="10" class="data"/>
-    <text x="695" y="537" text-anchor="middle" class="label">Analysis outputs</text>
-    <text x="695" y="563" text-anchor="middle" class="text">Features, detections, intervals</text>
-    <text x="695" y="586" text-anchor="middle" class="text">JSON / CSV / MAT results</text>
-    <text x="695" y="609" text-anchor="middle" class="small">Reviewable artifacts</text>
-  </g>
+  <path d="M70 570 C70 547 270 547 270 570 L270 670 C270 693 70 693 70 670 Z" class="external"/>
+  <ellipse cx="170" cy="570" rx="100" ry="23" class="external"/>
+  <text x="170" y="604" text-anchor="middle" class="name" fill="#bf7600">ECoG recordings</text>
+  <text x="170" y="628" text-anchor="middle" class="kind" fill="#bf7600">[External Data]</text>
+  <text x="170" y="656" text-anchor="middle" class="body" fill="#bf7600">Raw .dat signals</text>
 
-  <!-- Relationships -->
-  <path d="M250 360 L390 330" class="edge"/>
-  <text x="310" y="327" text-anchor="middle" class="edge-label">runs</text>
-  <path d="M250 590 L390 365" class="edge"/>
-  <text x="303" y="501" text-anchor="middle" class="edge-label">loads</text>
-  <path d="M650 330 L700 330" class="edge"/>
-  <text x="675" y="315" text-anchor="middle" class="edge-label">validated against</text>
-  <path d="M960 330 L1010 330" class="edge"/>
-  <text x="985" y="315" text-anchor="middle" class="edge-label">loads</text>
-  <path d="M520 405 L620 500" class="edge"/>
-  <text x="548" y="465" text-anchor="middle" class="edge-label">writes</text>
-  <path d="M830 405 L770 500" class="edge"/>
-  <text x="835" y="465" text-anchor="middle" class="edge-label">writes</text>
-  <path d="M1140 405 L900 500" class="edge"/>
-  <text x="1035" y="452" text-anchor="middle" class="edge-label">supports</text>
-  <path d="M545 562 L250 600" class="edge"/>
-  <text x="400" y="578" text-anchor="middle" class="edge-label">reviews</text>
+  <path d="M1160 570 C1160 547 1360 547 1360 570 L1360 670 C1360 693 1160 693 1160 670 Z" class="external"/>
+  <ellipse cx="1260" cy="570" rx="100" ry="23" class="external"/>
+  <text x="1260" y="604" text-anchor="middle" class="name" fill="#bf7600">Analysis results</text>
+  <text x="1260" y="628" text-anchor="middle" class="kind" fill="#bf7600">[External Data]</text>
+  <text x="1260" y="656" text-anchor="middle" class="body" fill="#bf7600">CSV, JSON, MAT</text>
 
-  <!-- Legend -->
-  <g transform="translate(965 570)">
-    <rect width="310" height="78" rx="8" fill="#ffffff" stroke="#d8dee8"/>
-    <rect x="18" y="17" width="24" height="16" rx="3" class="person"/><text x="52" y="30" class="small">Person / actor</text>
-    <rect x="155" y="17" width="24" height="16" rx="3" class="container"/><text x="189" y="30" class="small">Container</text>
-    <rect x="18" y="47" width="24" height="16" rx="3" class="data"/><text x="52" y="60" class="small">Data / external input</text>
-    <rect x="155" y="47" width="24" height="16" rx="3" class="system"/><text x="189" y="60" class="small">System boundary</text>
-  </g>
+  <path d="M270 285 L405 330" class="line"/>
+  <text x="330" y="291" text-anchor="middle" class="relation">runs</text>
+  <path d="M1160 570 L1160 100 L300 100 L270 285" class="line"/>
+  <text x="780" y="90" text-anchor="middle" class="relation">reviews</text>
+  <path d="M270 600 L405 420" class="line"/>
+  <text x="335" y="515" text-anchor="middle" class="relation">reads</text>
+  <path d="M675 347 L735 347" class="line"/>
+  <text x="705" y="331" text-anchor="middle" class="relation">invokes</text>
+  <path d="M880 420 L880 532" class="line"/>
+  <text x="904" y="480" class="relation">loads</text>
+  <path d="M675 535 L735 420" class="line"/>
+  <text x="686" y="478" text-anchor="middle" class="relation">validates</text>
+  <path d="M1025 347 L1160 600" class="line"/>
+  <text x="1117" y="449" text-anchor="middle" class="relation">writes</text>
+
+  <text x="60" y="845" class="caption">nVision Core · reference implementation preserved · processing paths: 200 / 500 / 1000 Hz</text>
 </svg>

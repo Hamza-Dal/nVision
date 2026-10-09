@@ -1,0 +1,21 @@
+function [amp3to8,amp8to12,amp12to20,amp20to40] = fftfeaturesbands500(data)
+% L=length(data);
+% NFFT =2^nextpow2(L);
+L=1000;
+NFFT =1024;
+allamp=abs(fft(data,NFFT))/L;
+%f=500/2*linspace(0,1,NFFT/2+1);
+S=8;
+E=18;
+S_allamp=sum(allamp);
+amp3to8=sum(allamp(S:E))/S_allamp;
+S=18;
+E=26;
+amp8to12=sum(allamp(S:E))/S_allamp;
+S=26;
+E=42;
+amp12to20=sum(allamp(S:E))/S_allamp;
+S=42;
+E=83;
+amp20to40=sum(allamp(S:E))/S_allamp;
+end

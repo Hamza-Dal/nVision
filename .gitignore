@@ -1,0 +1,11 @@
+# Archived legacy MATLAB/research repository; intentionally excluded from the Linux port.
+nVision-SeizureDetection/
+
+# Local generated previews and temporary artifacts.
+.tmp_sop_render/
+.tmp_sop_montage.png
+
+# Local Python environment and bytecode.
+nVision_core/python_port/.venv/
+**/__pycache__/
+*.py[cod]

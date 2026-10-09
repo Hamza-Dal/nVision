@@ -1,0 +1,10 @@
+function [stdfft,kurfft,skewfft,medianfft] = fftfeatures (data)
+L=1000;
+NFFT =1024;
+fftdata = (abs(  fft(data,NFFT)/L  ) ).^2;
+fftdata(83:end)=[];
+stdfft = std(fftdata);
+kurfft = kurtosis (fftdata);
+skewfft = skewness(fftdata);
+sumfftdata=cumsum(fftdata);
+medianfft = find(sumfftdata>(max(sumfftdata)/2),1);

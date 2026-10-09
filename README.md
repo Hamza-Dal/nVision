@@ -2,14 +2,6 @@
 
 nVision is a seizure-detection algorithm developed in 2010 and tested in three mouse models of epilepsy. It has since been used in multiple peer-reviewed studies involving mouse and rat models of epilepsy, as well as control animals.
 
-* * *
-
-## ◈ Software Architecture
-
-![nVision C4 container diagram](docs/nvision-c4-container.svg)
-
-* * *
-
 ## ◈ Installation
 nVision is available in three formats: MATLAB, Python and Linux.
 
@@ -60,6 +52,12 @@ applicable). The launcher uses a local Python virtual environment created by
 
 <p align="center"><img src="docs/figures/nvision-figure-4.jpg" alt="Figure 4" /></p>
 <p align="center"><em>Seizure detection in injured and aged rats. (A) TBI is linked with a higher occurrence of seizure events that are longer in duration (B). (C) In TBI animals, a significantly larger proportion of SLEs were simultaneously detected by two or more electrodes compared to controls (p &lt; 0.0001; two‐way ANOVA). (D) Average seizure frequency in older (9–12 and 12–18 months) is significantly higher compared to young rats (2 months). (E) The proportion of animals with seizures is higher in animals older than 9 months compared to 2‐month‐old rats. (F) Representative traces and corresponding ANN score from epidural and hippocampal recordings in rats. *p &lt; 0.05; **p &lt; 0.01; ***p &lt; 0.001; ****p &lt; 0.0001.</em></p>
+
+* * *
+
+## ◈ Software Architecture
+
+![nVision C4 container diagram](docs/nvision-c4-container.svg)
 
 * * *
 

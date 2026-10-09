@@ -65,9 +65,7 @@ applicable). The launcher uses a local Python virtual environment created by
 
 Kamintsky L, van Hameren G, Weissberg I, Moradi P, Prager O, Ahmad AA, et al. [An algorithm for seizure detection in rodents](https://doi.org/10.1002/epi4.70070). *Epilepsia Open*. 2025. Open access under the [CC BY-NC-ND 4.0 license](https://creativecommons.org/licenses/by-nc-nd/4.0/).
 
-<p align="center">
-  
-Curated by Hamza Imtiaz,<br />
+<p align="center">Curated by Hamza Imtiaz,<br />
 PhD Candidate at the Friedman Lab<br />
 Dalhousie University, Canada<br />
 Email: <a href="mailto:hamza@dal.ca">hamza@dal.ca</a><br />

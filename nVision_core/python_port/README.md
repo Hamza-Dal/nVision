@@ -40,4 +40,21 @@ chmod +x setup_linux.sh run_nvision.sh
 
 The scripts use a local `.venv`; MATLAB is not required. The input must be the
 headerless little-endian float32 `.dat` format used by nVision. The `--rate`
-value must match the recording's acquisition rate.
+value must match the recording's acquisition rate. Linux users need
+`python3-venv` and a normal desktop display session for the GUI.
+
+## Graphical interface
+
+Install the GUI dependencies with the same setup script, then launch:
+
+```bash
+chmod +x setup_linux.sh run_nvision.sh run_nvision_gui.sh
+./setup_linux.sh
+./run_nvision_gui.sh
+```
+
+The GUI requires a normal Ubuntu desktop session using X11 or Wayland. It uses
+the same Python pipeline as the CLI. Select a `.dat` recording, choose its
+acquisition rate, select an output folder, calculate features, and find
+seizures. The GUI writes the JSON result, feature CSV, and analysis MAT file
+to the selected output folder.

@@ -32,6 +32,19 @@ Replace `200` with the recording's acquisition rate (`500` or `1000` when
 applicable). The launcher uses a local Python virtual environment created by
 `setup_linux.sh`.
 
+For the desktop GUI on Ubuntu or another native Linux desktop session:
+
+```bash
+cd nVision_core/python_port
+chmod +x setup_linux.sh run_nvision.sh run_nvision_gui.sh
+./setup_linux.sh
+./run_nvision_gui.sh
+```
+
+The GUI requires an X11 or Wayland display session and uses the same Python
+processing pipeline as the CLI. It writes the JSON result, feature CSV, and
+analysis MAT file to the selected output folder.
+
 * * *
 
 ## ◈ ANN architecture

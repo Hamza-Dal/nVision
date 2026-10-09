@@ -31,6 +31,26 @@ def read_dat_float32(path: Path) -> np.ndarray:
     return np.fromfile(path, dtype="<f4")
 
 
+def read_dat_segment(path: Path, start: int, count: int) -> np.ndarray:
+    """Read a bounded segment without loading the complete recording."""
+    if start < 0 or count < 0:
+        raise ValueError("start and count must be non-negative")
+    with path.open("rb") as handle:
+        handle.seek(start * np.dtype("<f4").itemsize)
+        return np.fromfile(handle, dtype="<f4", count=count)
+
+
+def signal_preview(data: np.ndarray, rate: int, max_points: int = 20000) -> tuple[np.ndarray, np.ndarray]:
+    """Return evenly sampled time/value arrays suitable for an overview plot."""
+    values = np.asarray(data, dtype=float).reshape(-1)
+    if values.size == 0:
+        return np.empty(0, dtype=float), np.empty(0, dtype=float)
+    step = max(1, int(np.ceil(values.size / max_points)))
+    preview = np.asarray([chunk.mean() for chunk in np.array_split(values, int(np.ceil(values.size / step)))])
+    times = np.linspace(0, values.size / rate, preview.size, endpoint=False)
+    return times, preview
+
+
 def load_filter(filter_path: Path, variable: str) -> np.ndarray:
     """Load one MATLAB FIR coefficient vector."""
     loaded = io.loadmat(filter_path)
@@ -288,6 +308,70 @@ def export_result_json(
     return path
 
 
+def calculate_features(
+    input_path: Path,
+    filter_path: Path,
+    rate: int = RATE_DEFAULT,
+    threshold: float = THRESHOLD_DEFAULT,
+) -> dict:
+    """Load a recording and calculate its five-feature rows."""
+    raw = read_dat_float32(input_path)
+    if raw.size == 0:
+        raise ValueError("The input recording is empty or unreadable.")
+    hp, lp = load_rate_filters(filter_path.parent, rate)
+    features = process_feature_chunks(raw, rate, threshold, hp, lp)
+    return {
+        "raw": raw,
+        "features": features,
+        "hp": hp,
+        "lp": lp,
+        "rate": rate,
+        "threshold": threshold,
+        "signal_preview": signal_preview(raw, rate),
+        "sample_count": int(raw.size),
+    }
+
+
+def classify_prepared_features(
+    prepared: dict,
+    network_path: Path,
+    quiet_start: int = 0,
+    quiet_length: int = 60,
+    sensitivity: float = SENSITIVITY_DEFAULT,
+    duration: int = DURATION_DEFAULT,
+    interval: int = INTERVAL_DEFAULT,
+    classification_mode: tuple[bool, bool] = CLASSIFICATION_MODE_DEFAULT,
+) -> dict:
+    """Normalize prepared features, classify them, and find seizure events."""
+    raw = np.asarray(prepared["raw"])
+    rate = int(prepared["rate"])
+    if quiet_start < 0 or quiet_length <= 0:
+        raise ValueError("The quiet reference must have a positive duration and non-negative start.")
+    quiet_end = (quiet_start + quiet_length) * rate
+    if raw.size < quiet_end:
+        raise ValueError(
+            f"The recording is too short for the quiet reference: requires "
+            f"{quiet_end / rate:.0f} seconds, has {raw.size / rate:.1f} seconds."
+        )
+    quiet_begin = quiet_start * rate
+    quiet_features = winny_all(raw[quiet_begin:quiet_end], rate, prepared["threshold"], prepared["hp"], prepared["lp"])
+    _, quiet_settings = mapminmax_fit(quiet_features.T)
+    model = load_net219_numeric(network_path)
+    network_output = classify_feature_rows(prepared["features"], quiet_settings, model)
+    events, durations = find_seizures(network_output, sensitivity, duration, interval, classification_mode)
+    return {
+        "network_output": network_output,
+        "events": events,
+        "durations": durations,
+        "quiet_start": quiet_start,
+        "quiet_length": quiet_length,
+        "sensitivity": sensitivity,
+        "duration": duration,
+        "interval": interval,
+        "classification_mode": classification_mode,
+    }
+
+
 def run_pipeline(
     input_path: Path,
     output_path: Path,
@@ -305,17 +389,16 @@ def run_pipeline(
 ) -> dict:
     if use_features is not None and np.asarray(use_features).tolist() != [True, False, True, True] + [False] * 16 + [True, True] + [False] * 4:
         raise ValueError("The exported net_219 configuration requires OG features [1, 3, 4, 21, 22].")
-    raw = read_dat_float32(input_path)
-    hp, lp = load_rate_filters(filter_path.parent, rate)
-    features = process_feature_chunks(raw, rate, threshold, hp, lp)
-
-    quiet_begin = quiet_start * rate
-    quiet_end = (quiet_start + quiet_length) * rate
-    quiet_features = winny_all(raw[quiet_begin:quiet_end], rate, threshold, hp, lp)
-    _, quiet_settings = mapminmax_fit(quiet_features.T)
-    model = load_net219_numeric(network_path)
-    network_output = classify_feature_rows(features, quiet_settings, model)
-    events, durations = find_seizures(network_output, sensitivity, duration, interval, classification_mode)
+    prepared = calculate_features(input_path, filter_path, rate, threshold)
+    classified = classify_prepared_features(
+        prepared, network_path, quiet_start, quiet_length, sensitivity,
+        duration, interval, classification_mode,
+    )
+    raw = prepared["raw"]
+    features = prepared["features"]
+    network_output = classified["network_output"]
+    events = classified["events"]
+    durations = classified["durations"]
     export_result_json(output_path, events, network_output, features, rate, threshold, quiet_start, quiet_length,
                        sensitivity, duration, interval, classification_mode, durations)
     feature_output = output_path.with_name(output_path.stem + "_features.csv")
@@ -341,4 +424,8 @@ def run_pipeline(
         "feature_rows": len(features),
         "events": events,
         "durations": durations,
+        "feature_rows_data": features,
+        "network_output": network_output,
+        "signal_preview": prepared["signal_preview"],
+        "sample_count": int(raw.size),
     }

@@ -1,12 +1,6 @@
-# nVision
-
-Linux/WSL port of the nVision seizure-detection algorithm, preserving the MATLAB reference implementation and five-feature processing pipeline.
-
-* * *
-
 ## ◈ What is nVision?
 
-nVision processes intracranial EEG recordings through filtering, segmentation, feature extraction, normalization, ANN classification, and sliding-window thresholding.
+nVision is a seizure-detection algorithm developed in 2010 and tested in three mouse models of epilepsy. It has since been used in multiple peer-reviewed studies involving mouse and rat models of epilepsy, as well as control animals.
 
 * * *
 

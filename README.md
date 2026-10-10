@@ -19,8 +19,7 @@ nVision requires a current MATLAB installation with these toolboxes:
 ### Python port (Linux / WSL)
 
 The Python port runs without MATLAB and supports the 200, 500, and 1000 Hz
-processing paths. It expects a headerless little-endian float32 `.dat`
-recording.
+processing paths.
 
 ```bash
 cd nVision_core/python_port

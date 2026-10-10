@@ -100,25 +100,3 @@ folder:
 
 The CLI writes the JSON file specified by `--output` and creates matching
 feature and analysis files beside it.
-
-## Common problems
-
-### `No such file or directory`
-
-The terminal is not inside `nVision_core/python_port`. Run `pwd` and then use
-the appropriate `cd` command above.
-
-### `chmod: command not found`
-
-The command was entered in PowerShell. Run the Linux commands in Ubuntu or a
-WSL terminal. PowerShell uses the `.venv\\Scripts\\python.exe` commands shown
-above.
-
-### `Missing .venv`
-
-Run `./setup_linux.sh` from `nVision_core/python_port` first.
-
-### `No graphical Linux session detected`
-
-The Linux GUI needs a desktop display. Use a native Ubuntu desktop, WSLg, or
-run the CLI instead.

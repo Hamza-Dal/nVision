@@ -26,6 +26,16 @@ INTERVAL_DEFAULT = 1
 CLASSIFICATION_MODE_DEFAULT = (True, False)
 
 
+def resolve_core_file(package_root: Path, filename: str) -> Path:
+    """Locate a bundled filter/model asset in a full or flat Python checkout."""
+    candidates = (package_root.parent / filename, package_root / filename)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    locations = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(f"nVision asset not found: {filename}. Checked: {locations}")
+
+
 def read_dat_float32(path: Path) -> np.ndarray:
     """Read nVision's little-endian float32 .dat recording."""
     return np.fromfile(path, dtype="<f4")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .pipeline import run_pipeline
+from .pipeline import resolve_core_file, run_pipeline
 
 
 def main() -> int:
@@ -31,8 +31,8 @@ def main() -> int:
     }[args.classification_mode]
 
     package_root = Path(__file__).resolve().parents[1]
-    filter_path = args.filter_path or package_root.parent / "HP_fs200_fc2_order200.mat"
-    network_path = args.network_path or package_root / "net_219_numeric.mat"
+    filter_path = args.filter_path or resolve_core_file(package_root, "HP_fs200_fc2_order200.mat")
+    network_path = args.network_path or resolve_core_file(package_root, "net_219_numeric.mat")
     result = run_pipeline(
         args.input,
         args.output,

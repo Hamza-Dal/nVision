@@ -28,6 +28,7 @@ from .pipeline import (
     export_result_json,
     read_dat_float32,
     read_dat_segment,
+    resolve_core_file,
     signal_preview,
 )
 
@@ -54,8 +55,8 @@ class WorkWorker(QObject):
     def run(self) -> None:
         try:
             package_root = Path(__file__).resolve().parents[1]
-            filter_path = package_root.parent / "HP_fs200_fc2_order200.mat"
-            network_path = package_root / "net_219_numeric.mat"
+            filter_path = resolve_core_file(package_root, "HP_fs200_fc2_order200.mat")
+            network_path = resolve_core_file(package_root, "net_219_numeric.mat")
             prepared = self.prepared
             if prepared is None:
                 self.status.emit("Calculating features…")

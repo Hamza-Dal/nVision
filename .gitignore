@@ -9,3 +9,6 @@ nVision-SeizureDetection/
 nVision_core/python_port/.venv/
 **/__pycache__/
 *.py[cod]
+
+# Local ECoG test recordings and generated test outputs.
+nVision_core/test ecogs/

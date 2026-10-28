@@ -7,29 +7,30 @@ from pathlib import Path
 
 import numpy as np
 from scipy import io
-from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QPoint
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygon
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QComboBox, QDoubleSpinBox,
     QSpinBox, QStatusBar, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget, QHeaderView,
+    QWidget, QHeaderView, QScrollBar, QDialog, QDialogButtonBox, QGridLayout, QSplitter,
+    QSizePolicy,
 )
-
-import matplotlib
-
-matplotlib.use("QtAgg")
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+import pyqtgraph as pg
 
 from .pipeline import (
+    CLASSIFICATION_MODE_DEFAULT,
+    DURATION_DEFAULT,
+    INTERVAL_DEFAULT,
+    SENSITIVITY_DEFAULT,
+    THRESHOLD_DEFAULT,
     calculate_features,
     classify_prepared_features,
     export_result_json,
-    read_dat_float32,
     read_dat_segment,
     resolve_core_file,
-    signal_preview,
 )
 
 
@@ -37,6 +38,21 @@ FEATURE_NAMES = (
     "mean_square", "std", "absolute_difference_sum",
     "power_fraction_12_20hz", "power_fraction_20_40hz",
 )
+FLOAT32_BYTES = np.dtype("<f4").itemsize
+CROP_COPY_BYTES = 4 * 1024 * 1024
+
+
+def crop_filename(folder: Path, source: Path, start_sample: int, end_sample: int, rate: int,
+                  part: int, total_parts: int) -> Path:
+    """Return a non-overwriting filename that documents the saved time range."""
+    start_seconds, end_seconds = start_sample / rate, end_sample / rate
+    suffix = f"_part-{part:03d}" if total_parts > 1 else ""
+    stem = f"{source.stem}_crop_{start_seconds:g}s-{end_seconds:g}s{suffix}"
+    candidate, duplicate = folder / f"{stem}.dat", 2
+    while candidate.exists():
+        candidate = folder / f"{stem}_{duplicate}.dat"
+        duplicate += 1
+    return candidate
 
 
 class WorkWorker(QObject):
@@ -45,10 +61,18 @@ class WorkWorker(QObject):
     status = Signal(str)
 
     def __init__(self, operation: str, input_path: Path, output_dir: Path, rate: int,
+                 noise_threshold: float = THRESHOLD_DEFAULT,
+                 sensitivity: float = SENSITIVITY_DEFAULT,
+                 duration: int = DURATION_DEFAULT,
+                 interval: float = INTERVAL_DEFAULT,
+                 classification_mode: tuple[bool, bool] = CLASSIFICATION_MODE_DEFAULT,
                  quiet_start: int = 0, quiet_length: int = 60, prepared: dict | None = None) -> None:
         super().__init__()
         self.operation, self.input_path, self.output_dir = operation, input_path, output_dir
         self.rate, self.quiet_start, self.quiet_length = rate, quiet_start, quiet_length
+        self.noise_threshold = noise_threshold
+        self.sensitivity, self.duration, self.interval = sensitivity, duration, interval
+        self.classification_mode = classification_mode
         self.prepared = prepared
 
     @Slot()
@@ -60,7 +84,7 @@ class WorkWorker(QObject):
             prepared = self.prepared
             if prepared is None:
                 self.status.emit("Calculating features…")
-                prepared = calculate_features(self.input_path, filter_path, self.rate)
+                prepared = calculate_features(self.input_path, filter_path, self.rate, self.noise_threshold)
             feature_path = self.output_dir / "nvision_features.csv"
             np.savetxt(feature_path, prepared["features"], delimiter=",", header=",".join(FEATURE_NAMES), comments="")
             if self.operation == "features":
@@ -70,6 +94,7 @@ class WorkWorker(QObject):
             self.status.emit("Finding seizures…")
             classified = classify_prepared_features(
                 prepared, network_path, self.quiet_start, self.quiet_length,
+                self.sensitivity, self.duration, self.interval, self.classification_mode,
             )
             output_path = self.output_dir / "nvision_result.json"
             events, durations = classified["events"], classified["durations"]
@@ -98,15 +123,222 @@ class WorkWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class PlotCanvas(FigureCanvas):
+class CropWorker(QObject):
+    """Copy selected float32 sample ranges without materializing the source recording."""
+
+    finished = Signal(object)
+    failed = Signal(str)
+    status = Signal(str)
+
+    def __init__(self, input_path: Path, destination: Path,
+                 ranges: list[tuple[int, int]], rate: int) -> None:
+        super().__init__()
+        self.input_path, self.destination, self.ranges, self.rate = input_path, destination, ranges, rate
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            created: list[Path] = []
+            total = len(self.ranges)
+            for part, (start_sample, end_sample) in enumerate(self.ranges, start=1):
+                self.status.emit(f"Saving crop {part} of {total}…")
+                target = crop_filename(
+                    self.destination, self.input_path, start_sample, end_sample,
+                    self.rate, part, total,
+                )
+                remaining = (end_sample - start_sample) * FLOAT32_BYTES
+                with self.input_path.open("rb") as source, target.open("xb") as output:
+                    source.seek(start_sample * FLOAT32_BYTES)
+                    while remaining:
+                        block = source.read(min(CROP_COPY_BYTES, remaining))
+                        if not block:
+                            raise OSError("The recording ended before the requested crop range.")
+                        output.write(block)
+                        remaining -= len(block)
+                created.append(target)
+            self.finished.emit(created)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class TraceViewer(pg.GraphicsLayoutWidget):
+    """Two linked plots for the visible raw trace and ANN output."""
+
+    range_changed = Signal(float, float)
+
     def __init__(self) -> None:
-        self.figure = Figure(figsize=(12, 10), tight_layout=False)
-        grid = self.figure.add_gridspec(3, 1, height_ratios=(1.25, 1.25, 1.0))
-        self.overview = self.figure.add_subplot(grid[0, 0])
-        self.detail = self.figure.add_subplot(grid[1, 0])
-        self.ann = self.figure.add_subplot(grid[2, 0])
-        self.figure.subplots_adjust(left=0.14, right=0.98, top=0.96, bottom=0.07, hspace=0.85)
-        super().__init__(self.figure)
+        super().__init__()
+        self.setBackground("#10161b")
+        self.raw_plot = self.addPlot(row=0, col=0)
+        self.ann_plot = self.addPlot(row=1, col=0)
+        self.raw_plot.setLabel("left", "Signal", size="14pt")
+        self.ann_plot.setLabel("left", "ANN output", size="14pt")
+        self.ann_plot.setLabel("bottom", "Time", units="s", size="14pt")
+        for plot in (self.raw_plot, self.ann_plot):
+            plot.showGrid(x=True, y=True, alpha=0.3)
+            for axis_name in ("left", "bottom"):
+                axis = plot.getAxis(axis_name)
+                axis.setPen(pg.mkPen("#afc5cf"))
+                axis.setTextPen(pg.mkPen("#e6f2f6"))
+                axis.setStyle(tickFont=QFont("Arial", 12), tickTextOffset=8)
+        self.raw_plot.setMouseEnabled(x=True, y=True)
+        self.ann_plot.setMouseEnabled(x=True, y=True)
+        self.ann_plot.setXLink(self.raw_plot)
+        self.raw_curve = self.raw_plot.plot(pen=pg.mkPen("#67c8e8", width=1))
+        self.ann_curve = self.ann_plot.plot(pen=pg.mkPen("#c795e8", width=1.2))
+        self.threshold_line = pg.InfiniteLine(
+            pos=1.0, angle=0, pen=pg.mkPen("#c43d3d", style=Qt.PenStyle.DashLine)
+        )
+        self.ann_plot.addItem(self.threshold_line)
+        self._event_regions: list[tuple[pg.LinearRegionItem, pg.LinearRegionItem]] = []
+        self.raw_plot.getViewBox().sigXRangeChanged.connect(self._emit_range)
+
+    def _emit_range(self, _view_box: object, value_range: tuple[float, float]) -> None:
+        self.range_changed.emit(float(value_range[0]), float(value_range[1]))
+
+    def set_trace(self, times: np.ndarray, values: np.ndarray) -> None:
+        self.raw_curve.setData(times, values)
+        if values.size:
+            self.raw_plot.enableAutoRange(axis="y", enable=True)
+
+    def set_ann(self, times: np.ndarray, values: np.ndarray) -> None:
+        self.ann_curve.setData(times, values)
+        if values.size:
+            lower = min(0.0, float(np.nanmin(values)))
+            upper = max(1.1, float(np.nanmax(values)))
+            padding = max(0.05, (upper - lower) * 0.08)
+            self.ann_plot.setYRange(lower - padding, upper + padding, padding=0)
+
+    def set_x_range(self, start: float, end: float) -> None:
+        self.raw_plot.setXRange(start, end, padding=0)
+
+    def set_events(self, events: np.ndarray, durations: np.ndarray, start: float, end: float) -> None:
+        for raw_region, ann_region in self._event_regions:
+            self.raw_plot.removeItem(raw_region)
+            self.ann_plot.removeItem(ann_region)
+        self._event_regions.clear()
+        for index, event in enumerate(events):
+            event_start = float(event)
+            event_duration = max(0.0, float(durations[0, index]))
+            event_end = event_start + event_duration
+            if event_end < start or event_start > end:
+                continue
+            regions = []
+            for plot in (self.raw_plot, self.ann_plot):
+                region = pg.LinearRegionItem(
+                    values=(event_start, event_end), orientation="vertical", movable=False,
+                    brush=pg.mkBrush(196, 61, 61, 55), pen=pg.mkPen(196, 61, 61, 150),
+                )
+                plot.addItem(region)
+                regions.append(region)
+            self._event_regions.append((regions[0], regions[1]))
+
+
+def draw_spin_arrows(widget: QWidget) -> None:
+    """Draw high-contrast arrow glyphs because platform arrows can disappear in dark Qt themes."""
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor("#e6f2f6"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    right = widget.width() - 15
+    painter.drawPolygon(QPolygon([QPoint(right - 6, 15), QPoint(right + 6, 15), QPoint(right, 8)]))
+    bottom = widget.height() - 9
+    painter.drawPolygon(QPolygon([QPoint(right - 6, bottom - 7), QPoint(right + 6, bottom - 7), QPoint(right, bottom)]))
+    painter.end()
+
+
+class VisibleArrowSpinBox(QSpinBox):
+    def paintEvent(self, event: object) -> None:
+        super().paintEvent(event)
+        draw_spin_arrows(self)
+
+
+class VisibleArrowDoubleSpinBox(QDoubleSpinBox):
+    def paintEvent(self, event: object) -> None:
+        super().paintEvent(event)
+        draw_spin_arrows(self)
+
+
+class AdaptiveTimeSpinBox(VisibleArrowDoubleSpinBox):
+    """Store seconds while presenting compact whole-second, minute, or hour text."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setDecimals(0)
+
+    @staticmethod
+    def _unit_for(seconds: float) -> tuple[float, str]:
+        if seconds <= 180:
+            return 1.0, "s"
+        if seconds <= 360 * 60:
+            return 60.0, "min"
+        return 3600.0, "h"
+
+    def textFromValue(self, value: float) -> str:
+        scale, unit = self._unit_for(value)
+        return f"{round(value / scale):.0f} {unit}"
+
+    def valueFromText(self, text: str) -> float:
+        parts = text.strip().lower().split()
+        try:
+            value = float(parts[0])
+        except (IndexError, ValueError):
+            return self.value()
+        units = {"s": 1.0, "sec": 1.0, "seconds": 1.0, "min": 60.0, "m": 60.0,
+                 "minutes": 60.0, "h": 3600.0, "hr": 3600.0, "hours": 3600.0}
+        scale = units.get(parts[1], self._unit_for(self.value())[0]) if len(parts) > 1 else self._unit_for(self.value())[0]
+        return value * scale
+
+    def stepBy(self, steps: int) -> None:
+        scale, _ = self._unit_for(self.value())
+        self.setValue(self.value() + steps * scale)
+
+
+class VisibleArrowComboBox(QComboBox):
+    def paintEvent(self, event: object) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#e6f2f6"), 2.5))
+        right, middle = self.width() - 13, self.height() // 2
+        painter.drawLine(right - 6, middle - 3, right, middle + 3)
+        painter.drawLine(right, middle + 3, right + 6, middle - 3)
+        painter.end()
+
+
+class NeuroWeaveCard(QPushButton):
+    """Clickable brand card using NeuroWeave's compact brain-mark geometry."""
+
+    def __init__(self) -> None:
+        super().__init__("GitHub")
+        self.setProperty("actionCard", True)
+        self.setMinimumSize(190, 88)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolTip("Open the nVision project on GitHub")
+
+    def paintEvent(self, event: object) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#dce9ed"), 2))
+        scale, offset_x, offset_y = 1.2, 10, 23
+        left = [(16, 5), (14, 3), (11, 3), (9, 5), (6, 5), (4, 8),
+                (4, 11), (2, 13), (2, 17), (4, 20), (4, 23), (7, 27),
+                (11, 28), (14, 26), (16, 23)]
+        right = [(32 - x, y) for x, y in left]
+        def point(value: tuple[int, int]) -> tuple[int, int]:
+            return (round(offset_x + value[0] * scale), round(offset_y + value[1] * scale))
+        for points in (left, right):
+            for start, end in zip(points, points[1:]):
+                a, b = point(start), point(end)
+                painter.drawLine(a[0], a[1], b[0], b[1])
+        for points in (((16, 5), (16, 27)), ((9, 5), (10, 10), (7, 12)),
+                       ((23, 5), (22, 10), (25, 12)), ((4, 20), (9, 20), (11, 24)),
+                       ((28, 20), (23, 20), (21, 24))):
+            for start, end in zip(points, points[1:]):
+                a, b = point(start), point(end)
+                painter.drawLine(a[0], a[1], b[0], b[1])
+        painter.end()
 
 
 class MainWindow(QMainWindow):
@@ -120,68 +352,330 @@ class MainWindow(QMainWindow):
         self.worker_thread: QThread | None = None
         self.worker: QObject | None = None
         self.view_start, self.quiet_start, self.quiet_length = 0, 0, 60
+        self._updating_view = False
 
         self.input_edit = QLineEdit(); self.input_edit.setPlaceholderText("Select a headerless float32 .dat recording")
-        input_button = QPushButton("Browse…"); input_button.clicked.connect(self.select_input)
-        self.rate_combo = QComboBox(); self.rate_combo.addItems(["200", "500", "1000"])
+        self.rate_combo = VisibleArrowComboBox(); self.rate_combo.addItems(["200", "500", "1000"])
         self.rate_combo.currentTextChanged.connect(self.rate_changed)
-        self.output_edit = QLineEdit(); output_button = QPushButton("Browse…"); output_button.clicked.connect(self.select_output)
-        self.window_spin = QSpinBox(); self.window_spin.setRange(1, 86400); self.window_spin.setValue(60); self.window_spin.valueChanged.connect(self.window_changed)
-        self.goto_spin = QDoubleSpinBox(); self.goto_spin.setRange(0, 1_000_000_000); self.goto_spin.setDecimals(1); self.goto_spin.setSuffix(" s")
-        goto_button = QPushButton("Go to time"); goto_button.clicked.connect(self.go_to_time)
-        self.quiet_button = QPushButton("Select current view as quiet"); self.quiet_button.clicked.connect(self.select_current_quiet)
-        self.features_button = QPushButton("Calculate features"); self.features_button.clicked.connect(self.calculate_features_clicked)
-        self.seizures_button = QPushButton("Find seizures"); self.seizures_button.clicked.connect(self.find_seizures_clicked)
-        self.previous_button = QPushButton("◀ Previous"); self.previous_button.clicked.connect(lambda: self.shift_view(-1))
-        self.next_button = QPushButton("Next ▶"); self.next_button.clicked.connect(lambda: self.shift_view(1))
-        self.start_button = QPushButton("|◀ Start"); self.start_button.clicked.connect(lambda: self.set_view(0))
-        self.end_button = QPushButton("End ▶|"); self.end_button.clicked.connect(self.go_to_end)
+        self.noise_threshold_spin = VisibleArrowDoubleSpinBox(); self.noise_threshold_spin.setRange(0.0, 1_000_000.0); self.noise_threshold_spin.setDecimals(2); self.noise_threshold_spin.setSingleStep(0.01); self.noise_threshold_spin.setValue(THRESHOLD_DEFAULT)
+        self.sensitivity_spin = VisibleArrowDoubleSpinBox(); self.sensitivity_spin.setRange(0.0, 1_000_000.0); self.sensitivity_spin.setDecimals(2); self.sensitivity_spin.setSingleStep(0.01); self.sensitivity_spin.setValue(SENSITIVITY_DEFAULT)
+        self.duration_spin = VisibleArrowSpinBox(); self.duration_spin.setRange(1, 86_400); self.duration_spin.setSuffix(" s"); self.duration_spin.setValue(DURATION_DEFAULT)
+        self.interval_spin = VisibleArrowSpinBox(); self.interval_spin.setRange(1, 604_800); self.interval_spin.setValue(INTERVAL_DEFAULT)
+        self.interval_unit_combo = VisibleArrowComboBox(); self.interval_unit_combo.addItem("min", "minutes"); self.interval_unit_combo.addItem("s", "seconds")
+        self.output_edit = QLineEdit()
+        self.window_spin = VisibleArrowSpinBox(); self.window_spin.setRange(1, 86400); self.window_spin.setValue(60); self.window_spin.setSuffix(" s"); self.window_spin.valueChanged.connect(self.window_changed)
+        self.position_scroll = QScrollBar(Qt.Orientation.Horizontal); self.position_scroll.setRange(0, 0); self.position_scroll.valueChanged.connect(self.scroll_view_changed)
+        self.reset_view_button = QPushButton("Reset view"); self.reset_view_button.clicked.connect(self.reset_view)
+        self.view_label = QLabel("Visible: —")
+        self.visible_duration_label = QLabel("Visible duration")
+        for control in (self.visible_duration_label, self.window_spin, self.reset_view_button, self.view_label):
+            control.setFixedSize(180, 38)
+        self.settings_dialog = self.create_settings_dialog()
+        self.crop_dialog = self.create_crop_dialog()
 
-        form = QFormLayout()
-        input_row = QHBoxLayout(); input_row.addWidget(self.input_edit); input_row.addWidget(input_button); form.addRow("Recording", input_row)
-        form.addRow("Sampling rate (Hz)", self.rate_combo)
-        output_row = QHBoxLayout(); output_row.addWidget(self.output_edit); output_row.addWidget(output_button); form.addRow("Output folder", output_row)
+        self.select_recording_card = self.action_card("Select recording", self.select_input)
+        self.output_folder_card = self.action_card("Output folder", self.select_output)
+        self.detection_settings_card = self.action_card("Detection\nsettings", self.show_settings_dialog)
+        self.reset_card = self.action_card("Reset", self.reset_session)
+        self.quiet_card = self.action_card("Select current\nview as quiet", self.select_current_quiet)
+        self.crop_card = self.action_card("Crop recording", self.show_crop_dialog)
+        self.seizures_button = self.action_card("Find seizures", self.find_seizures_clicked)
+        self.brand_card = NeuroWeaveCard(); self.brand_card.clicked.connect(self.open_project_github)
+
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(18); controls.setVerticalSpacing(14)
+        cards = (
+            (self.select_recording_card, 0, 0), (self.output_folder_card, 0, 1),
+            (self.detection_settings_card, 0, 2), (self.reset_card, 0, 3),
+            (self.crop_card, 1, 0), (self.quiet_card, 1, 1),
+            (self.seizures_button, 1, 2), (self.brand_card, 1, 3),
+        )
+        for card, row, column in cards: controls.addWidget(card, row, column)
+        for column in range(4): controls.setColumnStretch(column, 1)
+
         nav_row = QHBoxLayout()
-        nav_row.addWidget(QLabel("Window size (s)")); nav_row.addWidget(self.window_spin); nav_row.addWidget(QLabel("Go to")); nav_row.addWidget(self.goto_spin); nav_row.addWidget(goto_button)
-        nav_row.addWidget(self.start_button); nav_row.addWidget(self.previous_button); nav_row.addWidget(self.next_button); nav_row.addWidget(self.end_button)
-        form.addRow("Time view", nav_row)
-        action_row = QHBoxLayout(); action_row.addWidget(self.quiet_button); action_row.addWidget(self.features_button); action_row.addWidget(self.seizures_button); form.addRow("Actions", action_row)
+        nav_row.setSpacing(10)
+        nav_row.addWidget(self.visible_duration_label); nav_row.addWidget(self.window_spin)
+        nav_row.addWidget(self.position_scroll, 1); nav_row.addWidget(self.reset_view_button); nav_row.addWidget(self.view_label)
+        navigation = QWidget(); navigation.setObjectName("traceNavigation"); navigation.setLayout(nav_row)
 
         self.summary = QLabel("Select a recording to begin.")
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Event", "Start (s)", "Duration (s)", "Mean output", "Positive epochs"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows); self.table.setMinimumWidth(320)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.table.itemSelectionChanged.connect(self.event_selected)
-        self.canvas = PlotCanvas()
+        self.canvas = TraceViewer(); self.canvas.range_changed.connect(self.viewer_range_changed)
 
         results_panel = QVBoxLayout()
-        results_panel.addWidget(QLabel("Detected events"))
+        self.detected_events_label = QLabel("Detected events")
+        self.detected_events_label.setStyleSheet("font-size: 19px; font-weight: 600;")
+        results_panel.addWidget(self.detected_events_label, alignment=Qt.AlignmentFlag.AlignTop)
         results_panel.addWidget(self.table, 1)
-        results_row = QHBoxLayout()
-        results_row.addWidget(self.canvas, 3)
-        results_row.addLayout(results_panel, 1)
-        central = QWidget(); layout = QVBoxLayout(central); layout.addLayout(form); layout.addWidget(self.summary); layout.addLayout(results_row, 1)
+        results_widget = QWidget(); results_widget.setLayout(results_panel)
+        self.results_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.results_splitter.setChildrenCollapsible(False)
+        self.results_splitter.addWidget(self.canvas)
+        self.results_splitter.addWidget(results_widget)
+        self.results_splitter.setStretchFactor(0, 3); self.results_splitter.setStretchFactor(1, 1)
+        self.results_splitter.setSizes([1500, 400])
+        central = QWidget(); layout = QVBoxLayout(central); layout.addLayout(controls); layout.addWidget(navigation); layout.addWidget(self.summary); layout.addWidget(self.results_splitter, 1)
         self.setCentralWidget(central); self.setStatusBar(QStatusBar())
+        self.bbbscience_label = QLabel("bbbscience.com")
+        self.statusBar().addPermanentWidget(self.bbbscience_label)
+        self.apply_control_panel_style()
+
+    def action_card(self, label: str, callback: object | None = None) -> QPushButton:
+        card = QPushButton(label)
+        card.setProperty("actionCard", True)
+        card.setMinimumSize(190, 88)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if callback is not None: card.clicked.connect(callback)
+        return card
+
+    def create_settings_dialog(self) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Detection settings")
+        dialog.setModal(True)
+        form = QFormLayout(dialog)
+        form.addRow("Sampling rate, Hz", self.rate_combo)
+        form.addRow("Noise threshold", self.noise_threshold_spin)
+        form.addRow("Sensitivity", self.sensitivity_spin)
+        form.addRow("Minimum seizure duration, s", self.duration_spin)
+        interval_row = QHBoxLayout(); interval_row.addWidget(self.interval_spin); interval_row.addWidget(self.interval_unit_combo)
+        form.addRow("Minimum seizure interval, min or s", interval_row)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        defaults_button = buttons.addButton("Defaults", QDialogButtonBox.ButtonRole.ResetRole)
+        defaults_button.clicked.connect(self.reset_detection_defaults)
+        buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        return dialog
+
+    def create_crop_dialog(self) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Crop recording")
+        dialog.setModal(True)
+        form = QFormLayout(dialog)
+        self.crop_start_spin = AdaptiveTimeSpinBox()
+        self.crop_end_spin = AdaptiveTimeSpinBox()
+        self.crop_mode_combo = VisibleArrowComboBox()
+        self.crop_mode_combo.addItem("Single clip", "single")
+        self.crop_mode_combo.addItem("Split into segments", "segments")
+        self.crop_segment_spin = AdaptiveTimeSpinBox(); self.crop_segment_spin.setRange(1, 1_000_000_000); self.crop_segment_spin.setValue(600)
+        self.crop_destination_edit = QLineEdit(); self.crop_destination_edit.setReadOnly(True)
+        choose_destination = QPushButton("Choose folder…"); choose_destination.clicked.connect(self.select_crop_destination)
+        self.crop_destination_edit.setFixedHeight(38); choose_destination.setFixedHeight(38)
+        destination_row = QHBoxLayout(); destination_row.addWidget(self.crop_destination_edit); destination_row.addWidget(choose_destination)
+        form.addRow("Start time", self.crop_start_spin)
+        form.addRow("End time", self.crop_end_spin)
+        form.addRow("Save", destination_row)
+        form.addRow("Mode", self.crop_mode_combo)
+        form.addRow("Segment duration", self.crop_segment_spin)
+        self.crop_mode_combo.currentIndexChanged.connect(self.update_crop_mode)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        self.update_crop_mode()
+        return dialog
+
+    @Slot()
+    def update_crop_mode(self) -> None:
+        self.crop_segment_spin.setEnabled(self.crop_mode_combo.currentData() == "segments")
+
+    @Slot()
+    def select_crop_destination(self) -> None:
+        path = QFileDialog.getExistingDirectory(self.crop_dialog, "Choose crop destination")
+        if path:
+            self.crop_destination_edit.setText(path)
+
+    @Slot()
+    def show_crop_dialog(self) -> None:
+        if self.input_path is None or self.preview is None:
+            QMessageBox.warning(self, "Recording required", "Select a recording before creating a crop.")
+            return
+        if self.worker_thread is not None:
+            QMessageBox.information(self, "Operation in progress", "Wait for the current operation to finish before cropping.")
+            return
+        length = self.preview["sample_count"] / int(self.rate_combo.currentText())
+        start = float(self.view_start)
+        end = min(length, start + self.window_spin.value())
+        self.crop_start_spin.setRange(0.0, length); self.crop_end_spin.setRange(0.0, length)
+        self.crop_start_spin.setValue(start); self.crop_end_spin.setValue(end)
+        self.crop_destination_edit.clear()
+        if self.crop_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        destination_text = self.crop_destination_edit.text().strip()
+        if not destination_text:
+            QMessageBox.warning(self, "Destination required", "Choose a folder for the cropped recording.")
+            return
+        self.start_crop(Path(destination_text), length)
+
+    def start_crop(self, destination: Path, recording_length: float) -> None:
+        start, end = self.crop_start_spin.value(), self.crop_end_spin.value()
+        if start < 0 or end > recording_length or start >= end:
+            QMessageBox.warning(self, "Invalid time range", "Start and end must be within the recording, with end after start.")
+            return
+        rate = int(self.rate_combo.currentText())
+        start_sample = int(round(start * rate)); end_sample = int(round(end * rate))
+        if start_sample >= end_sample:
+            QMessageBox.warning(self, "Invalid time range", "The selected range contains no complete samples.")
+            return
+        if self.crop_mode_combo.currentData() == "segments":
+            segment_samples = int(round(self.crop_segment_spin.value() * rate))
+            if segment_samples <= 0:
+                QMessageBox.warning(self, "Invalid segment duration", "Segment duration must be greater than zero.")
+                return
+            ranges = [(sample, min(sample + segment_samples, end_sample)) for sample in range(start_sample, end_sample, segment_samples)]
+        else:
+            ranges = [(start_sample, end_sample)]
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Crop destination error", str(exc))
+            return
+        self.seizures_button.setEnabled(False); self.crop_card.setEnabled(False)
+        self.worker_thread = QThread(self)
+        self.worker = CropWorker(self.input_path, destination, ranges, rate)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.finished.connect(self.crop_finished); self.worker.failed.connect(self.processing_failed)
+        self.worker.finished.connect(self.worker_thread.quit); self.worker.failed.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker_done)
+        self.worker_thread.start()
+
+    @Slot(object)
+    def crop_finished(self, files: list[Path]) -> None:
+        self.statusBar().showMessage(f"Saved {len(files)} cropped recording{'s' if len(files) != 1 else ''} to {files[0].parent}")
+
+    def show_settings_dialog(self) -> None:
+        original = (
+            self.rate_combo.currentIndex(), self.noise_threshold_spin.value(),
+            self.sensitivity_spin.value(), self.duration_spin.value(),
+            self.interval_spin.value(), self.interval_unit_combo.currentIndex(),
+        )
+        if self.settings_dialog.exec() == QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage("Detection settings updated.")
+            return
+        self.rate_combo.setCurrentIndex(original[0])
+        self.noise_threshold_spin.setValue(original[1])
+        self.sensitivity_spin.setValue(original[2])
+        self.duration_spin.setValue(original[3])
+        self.interval_spin.setValue(original[4])
+        self.interval_unit_combo.setCurrentIndex(original[5])
+
+    @Slot()
+    def reset_detection_defaults(self) -> None:
+        self.rate_combo.setCurrentText("200")
+        self.noise_threshold_spin.setValue(THRESHOLD_DEFAULT)
+        self.sensitivity_spin.setValue(SENSITIVITY_DEFAULT)
+        self.duration_spin.setValue(DURATION_DEFAULT)
+        self.interval_spin.setValue(INTERVAL_DEFAULT)
+        self.interval_unit_combo.setCurrentIndex(0)
+
+    def selected_interval_minutes(self) -> float:
+        interval = float(self.interval_spin.value())
+        return interval / 60.0 if self.interval_unit_combo.currentData() == "seconds" else interval
+
+    def apply_control_panel_style(self) -> None:
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background: #151a1e; color: #e6f2f6; font-size: 14px;
+            }
+            QLabel { background: transparent; }
+            QPushButton[actionCard="true"] {
+                background: #1f6d8d; color: white; border: 2px solid #0d3548;
+                border-radius: 0; font-size: 19px; font-weight: 600; padding: 10px;
+            }
+            QPushButton[actionCard="true"]:hover { background: #2b83a5; }
+            QPushButton[actionCard="true"]:focus { border: 3px solid #93d4e8; }
+            QPushButton[actionCard="true"]:disabled {
+                background: #607078; color: #c2cbd0; border-color: #48565c;
+            }
+            QWidget#traceNavigation {
+                background: #24313a; border: 1px solid #3f5966; padding: 8px;
+                color: #e6f2f6; font-size: 19px;
+            }
+            QWidget#traceNavigation QLabel, QWidget#traceNavigation QSpinBox,
+            QWidget#traceNavigation QPushButton { font-size: 19px; }
+            QDialog { background: #20282e; color: #e6f2f6; }
+            QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
+                background: #10161b; color: #f5fbfd; border: 1px solid #557180;
+                padding: 4px; min-height: 24px; font-size: 16px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: border; subcontrol-position: top right;
+                width: 30px; border-left: 1px solid #557180;
+            }
+            QComboBox::down-arrow { image: none; width: 0; height: 0; }
+            QSpinBox::up-button, QDoubleSpinBox::up-button {
+                subcontrol-origin: border; subcontrol-position: top right;
+                width: 30px; height: 18px; border-left: 1px solid #557180;
+            }
+            QSpinBox::down-button, QDoubleSpinBox::down-button {
+                subcontrol-origin: border; subcontrol-position: bottom right;
+                width: 30px; height: 18px; border-left: 1px solid #557180;
+            }
+            QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+                width: 10px; height: 10px;
+            }
+            QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+                width: 10px; height: 10px;
+            }
+            QTableWidget { background: #10161b; color: #e6f2f6; gridline-color: #38515d; }
+            QHeaderView::section { background: #24313a; color: #e6f2f6; padding: 6px; border: 0; }
+            QSplitter::handle:horizontal { background: #4e6e7b; width: 8px; }
+            QScrollBar:horizontal { background: #10161b; height: 16px; margin: 0; }
+            QScrollBar::handle:horizontal { background: #559ac0; min-width: 30px; }
+            QPushButton:not([actionCard="true"]) {
+                background: #345363; color: #f5fbfd; border: 1px solid #628394; padding: 5px;
+            }
+            QStatusBar { background: #151a1e; color: #a9cbd8; border: 0; font-size: 14px; }
+            QStatusBar::item { border: 0; }
+        """)
+
+    @Slot()
+    def open_project_github(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://github.com/Hamza-Dal/nVision"))
+
+    @Slot()
+    def reset_session(self) -> None:
+        self.input_path = None; self.preview = None; self.result = None
+        self.input_edit.clear(); self.output_edit.clear(); self.table.setRowCount(0)
+        self.view_start, self.quiet_start, self.quiet_length = 0, 0, 60
+        self.reset_detection_defaults()
+        self.window_spin.setValue(60)
+        self.position_scroll.setRange(0, 0); self.view_label.setText("Visible: —")
+        self.canvas.set_trace(np.empty(0), np.empty(0))
+        self.canvas.set_ann(np.empty(0), np.empty(0))
+        self.canvas.set_events(np.empty(0), np.empty((7, 0)), 0, 0)
+        self.summary.setText("Select a recording to begin.")
+        self.statusBar().showMessage("Session reset.")
 
     @Slot()
     def select_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select recording", "", "Data files (*.dat);;All files (*)")
         if not path: return
         self.input_path = Path(path); self.input_edit.setText(path); self.output_edit.setText(str(self.input_path.parent / "outputs")); self.result = None; self.table.setRowCount(0); self.view_start = 0; self.load_preview()
+        self.summary.setText(f"Recording selected: {self.input_path.name}  |  Output: {self.output_edit.text()}")
+        self.statusBar().showMessage(f"Recording selected: {self.input_path.name}")
 
     def load_preview(self) -> None:
         if self.input_path is None: return
         try:
-            raw = read_dat_float32(self.input_path)
-            if raw.size == 0: raise ValueError("The input recording is empty or unreadable.")
-            times, values = signal_preview(raw, int(self.rate_combo.currentText()))
-            self.preview = {"sample_count": int(raw.size), "preview": (times, values)}; self.goto_spin.setMaximum(max(0.0, raw.size / int(self.rate_combo.currentText()))); self.draw_plots()
+            sample_count = self.input_path.stat().st_size // np.dtype("<f4").itemsize
+            if sample_count == 0: raise ValueError("The input recording is empty or unreadable.")
+            self.preview = {"sample_count": int(sample_count)}
+            self.configure_view_controls()
+            self.set_view(0)
         except Exception as exc: QMessageBox.critical(self, "Recording error", str(exc))
 
     @Slot()
     def select_output(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select output folder")
-        if path: self.output_edit.setText(path)
+        if path:
+            self.output_edit.setText(path)
+            self.summary.setText(f"Output folder selected: {path}")
+            self.statusBar().showMessage(f"Output folder selected: {path}")
 
     def output_dir(self) -> Path | None:
         if self.input_path is None: QMessageBox.warning(self, "Input required", "Select a recording first."); return None
@@ -192,9 +686,19 @@ class MainWindow(QMainWindow):
     def start_worker(self, operation: str) -> None:
         output = self.output_dir()
         if output is None or self.input_path is None: return
-        self.features_button.setEnabled(False); self.seizures_button.setEnabled(False); self.worker_thread = QThread(self)
-        prepared = self.result if operation == "seizures" and self.result is not None and "features" in self.result else None
-        self.worker = WorkWorker(operation, self.input_path, output, int(self.rate_combo.currentText()), self.quiet_start, self.quiet_length, prepared); self.worker.moveToThread(self.worker_thread)
+        self.seizures_button.setEnabled(False); self.crop_card.setEnabled(False); self.worker_thread = QThread(self)
+        prepared = (
+            self.result if operation == "seizures" and self.result is not None
+            and "features" in self.result
+            and float(self.result["threshold"]) == self.noise_threshold_spin.value()
+            else None
+        )
+        self.worker = WorkWorker(
+            operation, self.input_path, output, int(self.rate_combo.currentText()),
+            self.noise_threshold_spin.value(), self.sensitivity_spin.value(),
+            self.duration_spin.value(), self.selected_interval_minutes(), CLASSIFICATION_MODE_DEFAULT,
+            self.quiet_start, self.quiet_length, prepared,
+        ); self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run); self.worker.status.connect(self.statusBar().showMessage); self.worker.finished.connect(self.processing_finished); self.worker.failed.connect(self.processing_failed); self.worker.finished.connect(self.worker_thread.quit); self.worker.failed.connect(self.worker_thread.quit); self.worker_thread.finished.connect(self.worker_done); self.worker_thread.start()
 
     @Slot()
@@ -214,7 +718,7 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def processing_finished(self, payload: dict) -> None:
         prepared = payload["prepared"]
-        if self.preview is None: self.preview = {"sample_count": prepared["sample_count"], "preview": prepared["signal_preview"]}
+        if self.preview is None: self.preview = {"sample_count": prepared["sample_count"]}
         self.result = {**prepared, **payload.get("classified", {}), "input_path": self.input_path}
         if "classified" in payload:
             self.populate_events(payload["classified"]); self.statusBar().showMessage(f"Complete — results saved to {payload['output_path']}")
@@ -230,66 +734,125 @@ class MainWindow(QMainWindow):
     def update_summary(self) -> None:
         if self.result is None: return
         length = self.result["sample_count"] / self.result["rate"]; count = len(self.result.get("events", []))
-        self.summary.setText(f"Recording: {length:.1f} s  |  Windows: {len(self.result['features'])}  |  Detected events: {count}  |  Quiet: {self.quiet_start}–{self.quiet_start + self.quiet_length} s")
+        self.summary.setText(f"Recording: {length:.1f} s  |  Windows: {len(self.result['features'])}  |  Detected events: {count}  |  Quiet: {self.quiet_start}–{self.quiet_start + self.quiet_length} s  |  Noise: {self.result['threshold']:.2f}  |  Sensitivity: {self.result.get('sensitivity', self.sensitivity_spin.value()):.2f}")
 
     @Slot(str)
     def processing_failed(self, message: str) -> None: QMessageBox.critical(self, "nVision error", message); self.statusBar().showMessage("Operation failed")
 
     @Slot()
     def worker_done(self) -> None:
-        self.features_button.setEnabled(True); self.seizures_button.setEnabled(True); self.worker = None; self.worker_thread = None
+        self.seizures_button.setEnabled(True); self.crop_card.setEnabled(True); self.worker = None; self.worker_thread = None
 
     def max_start(self) -> int:
         if self.preview is None: return 0
         return max(0, int(self.preview["sample_count"] / int(self.rate_combo.currentText()) - self.window_spin.value()))
 
     def set_view(self, start: float) -> None:
-        self.view_start = max(0, min(int(start), self.max_start())); self.goto_spin.setValue(self.view_start); self.draw_plots()
+        self._updating_view = True
+        try:
+            self.view_start = max(0, min(int(start), self.max_start()))
+            self.configure_view_controls()
+            self.draw_plots()
+        finally:
+            self._updating_view = False
 
-    def shift_view(self, direction: int) -> None: self.set_view(self.view_start + direction * self.window_spin.value())
-    def go_to_end(self) -> None: self.set_view(self.max_start())
-    def go_to_time(self) -> None: self.set_view(self.goto_spin.value())
+    def configure_view_controls(self) -> None:
+        if self.preview is None: return
+        self._updating_view = True
+        try:
+            duration = self.window_spin.value()
+            self.position_scroll.setRange(0, self.max_start())
+            self.position_scroll.setPageStep(duration)
+            self.position_scroll.setSingleStep(max(1, duration // 10))
+            self.position_scroll.setValue(self.view_start)
+            handle_width = max(42, min(260, 42 + int(180 * min(duration, 1800) / 1800)))
+            self.position_scroll.setStyleSheet(f"""
+                QScrollBar:horizontal {{ background: #10161b; height: 22px; margin: 0; }}
+                QScrollBar::handle:horizontal {{ background: #559ac0; min-width: {handle_width}px; }}
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+            """)
+        finally:
+            self._updating_view = False
+
+    @Slot(int)
+    def scroll_view_changed(self, value: int) -> None:
+        if not self._updating_view: self.set_view(value)
+
+    @Slot()
+    def reset_view(self) -> None:
+        self.set_view(0)
+
     def window_changed(self) -> None: self.set_view(self.view_start)
 
+    @Slot(float, float)
+    def viewer_range_changed(self, start: float, end: float) -> None:
+        if self._updating_view or self.preview is None: return
+        recording_length = self.preview["sample_count"] / int(self.rate_combo.currentText())
+        duration = max(1, min(int(round(end - start)), max(1, int(np.ceil(recording_length)))))
+        clamped_start = max(0, min(start, max(0.0, recording_length - duration)))
+        self._updating_view = True
+        try:
+            self.window_spin.blockSignals(True); self.window_spin.setValue(duration); self.window_spin.blockSignals(False)
+            self.view_start = int(clamped_start)
+            self.configure_view_controls()
+            self.draw_plots()
+        finally:
+            self._updating_view = False
+
     def select_current_quiet(self) -> None:
+        if self.preview is None:
+            QMessageBox.warning(self, "Recording required", "Select a recording before choosing a quiet view.")
+            return
         self.quiet_start, self.quiet_length = self.view_start, self.window_spin.value(); self.update_summary(); self.statusBar().showMessage(f"Quiet reference set to {self.quiet_start}–{self.quiet_start + self.quiet_length} s")
+
+    @staticmethod
+    def format_view_time(seconds: float) -> str:
+        seconds = max(0.0, float(seconds))
+        if seconds <= 360:
+            return f"{round(seconds):.0f} s"
+        minutes = seconds / 60.0
+        if minutes <= 1800:
+            return f"{round(minutes):.0f} min"
+        return f"{round(seconds / 3600.0):.0f} h"
 
     def draw_plots(self) -> None:
         if self.preview is None: return
-        axes = (self.canvas.overview, self.canvas.detail, self.canvas.ann)
-        for axis in axes: axis.clear()
-        times, values = self.preview["preview"]
-        recording_length = self.preview["sample_count"] / int(self.rate_combo.currentText())
-        context_length = min(recording_length, max(self.window_spin.value() * 10, 600))
-        context_start = max(0, min(self.view_start - (context_length - self.window_spin.value()) / 2, recording_length - context_length))
-        context_end = context_start + context_length
-        context_mask = (times >= context_start) & (times <= context_end)
-        axes[0].plot(times[context_mask], values[context_mask], linewidth=0.7, color="#315a7d")
-        axes[0].axvspan(self.view_start, self.view_start + self.window_spin.value(), color="#e7a43b", alpha=0.25)
-        if self.result is not None:
-            for event in self.result.get("events", []): axes[0].axvline(int(event), color="#c43d3d", alpha=0.65)
-        axes[0].set_xlim(context_start, context_end)
-        axes[0].set_title(""); axes[0].set_xlabel(""); axes[0].set_ylabel("Signal")
-        axes[0].text(-0.075, 0.5, f"Recording context\n({context_start:.0f}–{context_end:.0f} s)", transform=axes[0].transAxes, rotation=90, va="center", ha="center")
-        rate = int(self.rate_combo.currentText()); start = self.view_start * rate; detail = read_dat_segment(self.input_path, start, self.window_spin.value() * rate) if self.input_path else np.empty(0); detail_time = self.view_start + np.arange(detail.size) / rate
-        detail_end = min(recording_length, self.view_start + self.window_spin.value())
-        axes[1].plot(detail_time, detail, linewidth=0.6, color="#315a7d"); axes[1].set_xlim(self.view_start, detail_end); axes[1].set_title(""); axes[1].set_xlabel(""); axes[1].set_ylabel("Signal")
-        axes[1].ticklabel_format(axis="y", style="sci", scilimits=(0, 0), useMathText=True)
-        axes[1].text(-0.075, 0.5, f"Current view\n({self.view_start}–{detail_end:.0f} s)", transform=axes[1].transAxes, rotation=90, va="center", ha="center")
+        rate = int(self.rate_combo.currentText())
+        recording_length = self.preview["sample_count"] / rate
+        start = float(self.view_start)
+        end = min(recording_length, start + self.window_spin.value())
+        sample_start = int(start * rate)
+        sample_count = max(0, int(np.ceil((end - start) * rate)))
+        trace = read_dat_segment(self.input_path, sample_start, sample_count) if self.input_path else np.empty(0)
+        max_display_points = 20_000
+        step = max(1, int(np.ceil(trace.size / max_display_points)))
+        trace_times = start + np.arange(0, trace.size, step, dtype=float) / rate
+        self.canvas.set_trace(trace_times, trace[::step])
         if self.result is not None and "network_output" in self.result:
             output = np.asarray(self.result["network_output"])
-            output_times = np.arange(output.size, dtype=float)
-            ann_mask = (output_times >= context_start) & (output_times <= context_end)
-            axes[2].plot(output_times[ann_mask], output[ann_mask], linewidth=0.8, color="#754c9b")
-            axes[2].axhline(1.0, color="#c43d3d", linestyle="--", linewidth=0.8)
-            axes[2].set_xlim(context_start, context_end)
-        axes[2].set_title(""); axes[2].set_xlabel("Time (s)"); axes[2].set_ylabel("Output")
-        axes[2].text(-0.075, 0.5, "ANN output", transform=axes[2].transAxes, rotation=90, va="center", ha="center")
-        self.canvas.draw_idle()
+            output_start = max(0, int(np.floor(start)))
+            output_end = min(output.size, int(np.ceil(end)) + 1)
+            self.canvas.set_ann(np.arange(output_start, output_end, dtype=float), output[output_start:output_end])
+            self.canvas.set_events(
+                np.asarray(self.result.get("events", [])),
+                np.asarray(self.result.get("durations", np.empty((7, 0)))), start, end,
+            )
+        else:
+            self.canvas.set_ann(np.empty(0), np.empty(0))
+            self.canvas.set_events(np.empty(0), np.empty((7, 0)), start, end)
+        self.canvas.set_x_range(start, end)
+        self.view_label.setText(f"Visible: {self.format_view_time(start)}–{self.format_view_time(end)}")
 
     @Slot()
     def event_selected(self) -> None:
-        if self.result is not None and self.table.currentRow() >= 0: self.set_view(int(self.result["events"][self.table.currentRow()]))
+        if self.result is None or self.table.currentRow() < 0:
+            return
+        row = self.table.currentRow()
+        event_start = float(self.result["events"][row])
+        event_duration = max(1.0, float(self.result["durations"][0, row]))
+        visible_duration = max(1, int(np.ceil(event_duration * 2)))
+        self.window_spin.setValue(visible_duration)
+        self.set_view(event_start - event_duration / 2)
 
 
 def main() -> int:

@@ -233,7 +233,7 @@ def find_seizures(
     outputs: np.ndarray,
     sensitivity: float = SENSITIVITY_DEFAULT,
     duration: int = DURATION_DEFAULT,
-    interval: int = INTERVAL_DEFAULT,
+    interval: float = INTERVAL_DEFAULT,
     classification_mode: tuple[bool, bool] = CLASSIFICATION_MODE_DEFAULT,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply OG nVision threshold/slope classification and duration statistics."""
@@ -245,16 +245,17 @@ def find_seizures(
         candidates.extend((np.flatnonzero(rolling) + duration - 1).tolist())
     if classification_mode[1]:
         candidates.extend(_slope_candidates(values, sensitivity))
-    accepted = []
+    accepted_endpoints = []
     for index in sorted(set(candidates)):
-        if not accepted or index > accepted[-1] + interval * 60:
-            accepted.append(int(index))
-    events = np.asarray(accepted, dtype=int)
+        if not accepted_endpoints or index > accepted_endpoints[-1] + interval * 60:
+            accepted_endpoints.append(int(index))
 
-    durations = np.zeros((7, len(events)), dtype=float)
+    event_starts = np.empty(len(accepted_endpoints), dtype=int)
+    durations = np.zeros((7, len(accepted_endpoints)), dtype=float)
     window_size = max(1, int(interval * 60))
-    for n, event_index in enumerate(events):
+    for n, event_index in enumerate(accepted_endpoints):
         onset = max(0, event_index - duration + 1)
+        event_starts[n] = onset
         end = min(len(values), onset + 60)
         run = values[onset:end] >= sensitivity
         seizure_length = int(np.argmax(~run)) if (~run).any() else len(run)
@@ -269,7 +270,7 @@ def find_seizures(
         durations[4, n] = positive.mean() if positive.size else np.nan
         durations[5, n] = finite[:last_epoch].mean() if last_epoch else np.nan
         durations[6, n] = finite.mean() if finite.size else np.nan
-    return events, durations
+    return event_starts, durations
 
 
 def _json_value(value):
@@ -289,7 +290,7 @@ def export_result_json(
     quiet_length: float,
     sensitivity: float,
     duration: int,
-    interval: int,
+    interval: float,
     classification_mode: tuple[bool, bool],
     durations: np.ndarray,
 ) -> Path:
@@ -300,7 +301,7 @@ def export_result_json(
         "noise_threshold": float(threshold),
         "sensitivity": float(sensitivity),
         "duration_seconds": int(duration),
-        "interval_minutes": int(interval),
+        "interval_minutes": float(interval),
         "classification_mode": [bool(v) for v in classification_mode],
         "quiet_reference_start_seconds": float(quiet_start),
         "quiet_reference_seconds": float(quiet_length),
@@ -349,7 +350,7 @@ def classify_prepared_features(
     quiet_length: int = 60,
     sensitivity: float = SENSITIVITY_DEFAULT,
     duration: int = DURATION_DEFAULT,
-    interval: int = INTERVAL_DEFAULT,
+    interval: float = INTERVAL_DEFAULT,
     classification_mode: tuple[bool, bool] = CLASSIFICATION_MODE_DEFAULT,
 ) -> dict:
     """Normalize prepared features, classify them, and find seizure events."""
@@ -393,7 +394,7 @@ def run_pipeline(
     threshold: float = THRESHOLD_DEFAULT,
     sensitivity: float = SENSITIVITY_DEFAULT,
     duration: int = DURATION_DEFAULT,
-    interval: int = INTERVAL_DEFAULT,
+    interval: float = INTERVAL_DEFAULT,
     classification_mode: tuple[bool, bool] = CLASSIFICATION_MODE_DEFAULT,
     use_features: np.ndarray | None = None,
 ) -> dict:
